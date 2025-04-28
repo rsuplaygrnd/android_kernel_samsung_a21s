@@ -198,7 +198,7 @@ int ksu_handle_devpts(struct inode *inode)
 	return 0;
 }
 
-#ifdef CONFIG_KPROBES
+#if defined(CONFIG_KPROBES) && 0
 
 __maybe_unused static int faccessat_handler_pre(struct kprobe *p,
 						struct pt_regs *regs)
@@ -319,7 +319,7 @@ static struct kprobe *su_kps[4];
 // sucompat: permited process can execute 'su' to gain root access.
 void ksu_sucompat_init()
 {
-#ifdef CONFIG_KPROBES
+#if defined(CONFIG_KPROBES) && 0
 	su_kps[0] = init_kprobe(SYS_EXECVE_SYMBOL, sys_execve_handler_pre);
 	su_kps[1] = init_kprobe(SYS_FACCESSAT_SYMBOL, sys_faccessat_handler_pre);
 	su_kps[2] = init_kprobe(SYS_NEWFSTATAT_SYMBOL, sys_newfstatat_handler_pre);
@@ -329,7 +329,7 @@ void ksu_sucompat_init()
 
 void ksu_sucompat_exit()
 {
-#ifdef CONFIG_KPROBES
+#if defined(CONFIG_KPROBES) && 0
 	for (int i = 0; i < ARRAY_SIZE(su_kps); i++) {
 		destroy_kprobe(&su_kps[i]);
 	}
