@@ -8,11 +8,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/task_stack.h>
-#else
-#include <linux/sched.h>
-#endif
 
 #include "objsec.h"
 #include "allowlist.h"
@@ -23,12 +19,6 @@
 
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
-
-bool ksu_faccessat_hook __read_mostly = true;
-bool ksu_stat_hook __read_mostly = true;
-bool ksu_execve_sucompat_hook __read_mostly = true;
-bool ksu_execveat_sucompat_hook __read_mostly = true;
-bool ksu_devpts_hook __read_mostly = true;
 
 extern void escape_to_root();
 
@@ -60,12 +50,6 @@ int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
 {
 	const char su[] = SU_PATH;
 
-#ifndef CONFIG_KSU_WITH_KPROBES
-	if (!ksu_faccessat_hook) {
-		return 0;
-	}
-#endif
-
 	if (!ksu_is_allow_uid(current_uid().val)) {
 		return 0;
 	}
@@ -86,12 +70,6 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 {
 	// const char sh[] = SH_PATH;
 	const char su[] = SU_PATH;
-
-#ifndef CONFIG_KSU_WITH_KPROBES
-	if (!ksu_stat_hook){
-		return 0;
-	}
-#endif
 
 	if (!ksu_is_allow_uid(current_uid().val)) {
 		return 0;
@@ -137,12 +115,6 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 	const char sh[] = KSUD_PATH;
 	const char su[] = SU_PATH;
 
-#ifndef CONFIG_KSU_WITH_KPROBES
-	if (!ksu_execveat_sucompat_hook) {
-		return 0;
-	}
-#endif
-
 	if (unlikely(!filename_ptr))
 		return 0;
 
@@ -172,12 +144,6 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 	const char su[] = SU_PATH;
 	char path[sizeof(su) + 1];
 
-#ifndef CONFIG_KSU_WITH_KPROBES
-	if (!ksu_execve_sucompat_hook) {
-		return 0;
-	}
-#endif
-
 	if (unlikely(!filename_user))
 		return 0;
 
@@ -200,12 +166,6 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 
 int ksu_handle_devpts(struct inode *inode)
 {
-#ifndef CONFIG_KSU_WITH_KPROBES
-	if (!ksu_devpts_hook) {
-		return 0;
-	}
-#endif
-
 	if (!current->mm) {
 		return 0;
 	}
@@ -220,12 +180,7 @@ int ksu_handle_devpts(struct inode *inode)
 		return 0;
 
 	if (ksu_devpts_sid) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
 		struct inode_security_struct *sec = selinux_inode(inode);
-#else
-		struct inode_security_struct *sec =
-			(struct inode_security_struct *)inode->i_security;
-#endif
 		if (sec) {
 			sec->sid = ksu_devpts_sid;
 		}
@@ -234,7 +189,7 @@ int ksu_handle_devpts(struct inode *inode)
 	return 0;
 }
 
-#ifdef CONFIG_KSU_WITH_KPROBES
+#ifdef CONFIG_KPROBES
 
 static int faccessat_handler_pre(struct kprobe *p, struct pt_regs *regs)
 {
@@ -271,12 +226,8 @@ static int execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
 static int pts_unix98_lookup_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct inode *inode;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 6, 0)
 	struct file *file = (struct file *)PT_REGS_PARM2(regs);
 	inode = file->f_path.dentry->d_inode;
-#else
-	inode = (struct inode *)PT_REGS_PARM2(regs);
-#endif
 
 	return ksu_handle_devpts(inode);
 }
@@ -317,33 +268,19 @@ static struct kprobe *su_kps[4];
 // sucompat: permited process can execute 'su' to gain root access.
 void ksu_sucompat_init()
 {
-#ifdef CONFIG_KSU_WITH_KPROBES
+#ifdef CONFIG_KPROBES
 	su_kps[0] = init_kprobe(SYS_EXECVE_SYMBOL, execve_handler_pre);
 	su_kps[1] = init_kprobe(SYS_FACCESSAT_SYMBOL, faccessat_handler_pre);
 	su_kps[2] = init_kprobe(SYS_NEWFSTATAT_SYMBOL, newfstatat_handler_pre);
 	su_kps[3] = init_kprobe("pts_unix98_lookup", pts_unix98_lookup_pre);
-#else
-	ksu_faccessat_hook = true;
-	ksu_stat_hook = true;
-	ksu_execve_sucompat_hook = true;
-	ksu_execveat_sucompat_hook = true;
-	ksu_devpts_hook = true;
-	pr_info("ksu_sucompat_init: hooks enabled: execve/execveat_su, faccessat, stat, devpts\n");
 #endif
 }
 
 void ksu_sucompat_exit()
 {
-#ifdef CONFIG_KSU_WITH_KPROBES
+#ifdef CONFIG_KPROBES
 	for (int i = 0; i < ARRAY_SIZE(su_kps); i++) {
 		destroy_kprobe(&su_kps[i]);
 	}
-#else
-	ksu_faccessat_hook = false;
-	ksu_stat_hook = false;
-	ksu_execve_sucompat_hook = false;
-	ksu_execveat_sucompat_hook = false;
-	ksu_devpts_hook = false;
-	pr_info("ksu_sucompat_exit: hooks disabled: execve/execveat_su, faccessat, stat, devpts\n");
 #endif
 }
