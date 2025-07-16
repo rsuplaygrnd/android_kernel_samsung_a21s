@@ -246,7 +246,10 @@ static void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
 		struct dwc3_request	*req;
 
 		req = next_request(&dep->pending_list);
-		dwc3_gadget_giveback(dep, req, -ECONNRESET);
+		if (!dwc->connected)
+			dwc3_gadget_giveback(dep, req, -ESHUTDOWN);
+		else
+			dwc3_gadget_giveback(dep, req, -ECONNRESET);
 	}
 
 	dwc->ep0state = EP0_SETUP_PHASE;
@@ -791,13 +794,12 @@ static int dwc3_ep0_std_request(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 		ret = dwc3_ep0_set_address(dwc, ctrl);
 		break;
 	case USB_REQ_SET_CONFIGURATION:
-#if IS_ENABLED(CONFIG_BATTERY_SAMSUNG)
 		if (dwc->gadget.speed == USB_SPEED_SUPER)
 			dwc->vbus_current = USB_CURRENT_SUPER_SPEED;
 		else
 			dwc->vbus_current = USB_CURRENT_HIGH_SPEED;
 		schedule_work(&dwc->set_vbus_current_work);
-#endif
+
 		ret = dwc3_ep0_set_config(dwc, ctrl);
 		break;
 	case USB_REQ_SET_SEL:
@@ -1081,18 +1083,6 @@ static void dwc3_ep0_do_control_status(struct dwc3 *dwc,
 	struct dwc3_ep		*dep = dwc->eps[event->endpoint_number];
 
 	__dwc3_ep0_do_control_status(dwc, dep);
-}
-
-void dwc3_ep0_send_delayed_status(struct dwc3 *dwc)
-{
-	unsigned int direction = !dwc->ep0_expect_in;
-
-	dwc->delayed_status = false;
-
-	if (dwc->ep0state != EP0_STATUS_PHASE)
-		return;
-
-	__dwc3_ep0_do_control_status(dwc, dwc->eps[direction]);
 }
 
 static void dwc3_ep0_end_control_data(struct dwc3 *dwc, struct dwc3_ep *dep)

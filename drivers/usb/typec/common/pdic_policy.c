@@ -681,10 +681,8 @@ static void vbus_turn_on_ctrl(struct pdic_policy *pp_data, bool enable)
 		goto skip_notify;
 	}	
 
-#ifdef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
 	must_block_host = is_blocked(o_notify, NOTIFY_BLOCK_TYPE_HOST);
 	unsupport_host  = !is_usb_host(o_notify);
-#endif
 
 	pr_info("%s : enable=%d, must_block_host=%d unsupport_host=%d\n",
 		__func__, enable, must_block_host, unsupport_host);
@@ -737,7 +735,7 @@ skip_notify:
 		gpio_set_value(pp_data->ic_data->vbus_dischar_gpio, 1);
 		val2 = gpio_get_value(pp_data->ic_data->vbus_dischar_gpio);
 		schedule_delayed_work
-			(&pp_data->dischar_work, msecs_to_jiffies(160));
+			(&pp_data->dischar_work, msecs_to_jiffies(120));
 		pr_info("%s vbus_discharging %d->%d\n", __func__, val1, val2);
 	}
 err:

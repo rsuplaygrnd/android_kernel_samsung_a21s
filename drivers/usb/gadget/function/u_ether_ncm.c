@@ -29,6 +29,7 @@ static inline int is_promisc(u16 cdc_filter)
 #ifdef NCM_WITH_TIMER
 static void tx_complete_ncm_timer(struct usb_ep *ep, struct usb_request *req)
 {
+	struct sk_buff	*skb = req->context;
 	struct eth_dev	*dev = ep->driver_data;
 	int pkts_compl;
 
@@ -187,6 +188,7 @@ netdev_tx_t eth_start_xmit_ncm_timer(struct sk_buff *skb,
 	struct usb_ep		*in;
 	u16			cdc_filter;
 	int added_offset = 0;
+	bool eth_supports_multi_frame = 0;
 
 	if (dev->en_timer) {
 		hrtimer_cancel(&dev->tx_timer);
@@ -197,11 +199,15 @@ netdev_tx_t eth_start_xmit_ncm_timer(struct sk_buff *skb,
 	if (dev->port_usb) {
 		in = dev->port_usb->in_ep;
 		cdc_filter = dev->port_usb->cdc_filter;
+		eth_supports_multi_frame = dev->port_usb->supports_multi_frame;
 	} else {
 		in = NULL;
 		cdc_filter = 0;
 	}
 	spin_unlock_irqrestore(&dev->lock, flags);
+
+	if (!skb)
+		goto drop;
 
 	if (skb && !in) {
 		dev_kfree_skb_any(skb);
@@ -268,7 +274,7 @@ netdev_tx_t eth_start_xmit_ncm_timer(struct sk_buff *skb,
 			/* Multi frame CDC protocols may store the frame for
 			 * later which is not a dropped frame.
 			 */
-			if (dev->port_usb->supports_multi_frame)
+			if (eth_supports_multi_frame)
 				goto multiframe;
 			goto drop;
 		}
@@ -440,7 +446,7 @@ static void tx_complete_ncm(struct usb_ep *ep, struct usb_request *req)
 				retval = usb_ep_queue(in, new_req, GFP_ATOMIC);
 				switch (retval) {
 				default:
-					printk(KERN_ERR"usb: dropped tx_complete_newreq(%p)\n", new_req);
+					printk(KERN_ERR"usb: dropped tx_complete_newreq(%pK)\n", new_req);
 					DBG(dev, "tx queue err %d\n", retval);
 					new_req->length = 0;
 					spin_lock(&dev->tx_req_lock);
@@ -555,7 +561,7 @@ netdev_tx_t eth_start_xmit_ncm(struct sk_buff *skb,
 
 		dev->tx_skb_hold_count = 0;
 		spin_unlock_irqrestore(&dev->lock, flags);
-		if (!skb) {
+		if (!skb && dev->port_usb) {
 			/* Multi frame CDC protocols may store the frame for
 			 * later which is not a dropped frame.
 			 */

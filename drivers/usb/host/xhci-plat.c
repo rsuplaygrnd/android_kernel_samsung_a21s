@@ -496,7 +496,7 @@ static int xhci_plat_probe(struct platform_device *pdev)
 			*priv = *priv_match;
 	}
 
-	device_wakeup_enable(hcd->self.controller);
+	device_set_wakeup_capable(&pdev->dev, true);
 
 	xhci->clk = clk;
 	xhci->reg_clk = reg_clk;
@@ -640,8 +640,8 @@ static int xhci_plat_remove(struct platform_device *dev)
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	struct clk *clk = xhci->clk;
 	struct clk *reg_clk = xhci->reg_clk;
+#ifndef CONFIG_USB_HOST_SAMSUNG_FEATURE
 	struct usb_hcd *shared_hcd = xhci->shared_hcd;
-#if !IS_ENABLED(CONFIG_USB_HOST_SAMSUNG_FEATURE)
 	int timeout = 0;
 #endif
 	
@@ -650,7 +650,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 	usb3_portsc = NULL;
 	pp_set_delayed = 0;
 
-#if IS_ENABLED(CONFIG_USB_HOST_SAMSUNG_FEATURE)
+#if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
 	pr_info("%s\n", __func__);
 	/* In order to prevent kernel panic */
 	if (!pm_runtime_suspended(&xhci->shared_hcd->self.root_hub->dev)) {
@@ -686,11 +686,12 @@ static int xhci_plat_remove(struct platform_device *dev)
 	wake_unlock(xhci->wakelock);
 	wake_lock_destroy(xhci->wakelock);
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&dev->dev, "remove hcd (shared)\n");
-#endif
+#if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
+	usb_remove_hcd(xhci->shared_hcd);
+#else
 	usb_remove_hcd(shared_hcd);
 	xhci->shared_hcd = NULL;
+#endif
 	usb_phy_shutdown(hcd->usb_phy);
 
 	/*
@@ -702,12 +703,12 @@ static int xhci_plat_remove(struct platform_device *dev)
 	if (parent && hcd->phy)
 		hcd->phy = NULL;
 
-#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
-	dev_info(&dev->dev, "remove hcd (main)\n");
-#endif
 	usb_remove_hcd(hcd);
+#if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
+	usb_put_hcd(xhci->shared_hcd);
+#else
 	usb_put_hcd(shared_hcd);
-
+#endif
 	clk_disable_unprepare(clk);
 	clk_disable_unprepare(reg_clk);
 	usb_put_hcd(hcd);
@@ -716,7 +717,6 @@ static int xhci_plat_remove(struct platform_device *dev)
 	pm_runtime_put_noidle(&dev->dev);
 	pm_runtime_set_suspended(&dev->dev);
 
-	pr_info("%s-n", __func__);
 	return 0;
 }
 

@@ -629,56 +629,34 @@ int lockup_detector_offline_cpu(unsigned int cpu)
 	return 0;
 }
 
-#ifdef CONFIG_SEC_DEBUG_LOCKUP_INFO
-void sl_softirq_entry(const char *softirq_type, void *fn)
-{
-	struct softlockup_info *sl_info = per_cpu_ptr(&percpu_sl_info, smp_processor_id());
-
-	if (softirq_type) {
-		strncpy(sl_info->softirq_info.softirq_type, softirq_type, sizeof(sl_info->softirq_info.softirq_type) - 1);
-		sl_info->softirq_info.softirq_type[SOFTIRQ_TYPE_LEN - 1] = '\0';
-	}
-	sl_info->softirq_info.last_arrival = local_clock();
-	sl_info->softirq_info.fn = fn;
-}
-
-void sl_softirq_exit(void)
-{
-	struct softlockup_info *sl_info = per_cpu_ptr(&percpu_sl_info, smp_processor_id());
-	sl_info->softirq_info.last_arrival = 0;
-	sl_info->softirq_info.fn = (void *)0;
-	sl_info->softirq_info.softirq_type[0] = '\0';
-}
-
 void check_softlockup_type(void)
 {
-	int cpu = smp_processor_id();
-	struct softlockup_info *sl_info = per_cpu_ptr(&percpu_sl_info, cpu);
+    int cpu = smp_processor_id();
+    struct softlockup_info *sl_info = per_cpu_ptr(&percpu_sl_info, cpu);
 
-	sl_info->preempt_count = preempt_count();
-	if (softirq_count() &&
-		sl_info->softirq_info.last_arrival != 0 && sl_info->softirq_info.fn != NULL) {
-		sl_info->delay_time = local_clock() - sl_info->softirq_info.last_arrival;
-		sl_info->sl_type = SL_SOFTIRQ_STUCK;
-		pr_auto(ASL9, "Softlockup state: %s, Latency: %lluns, Softirq type: %s, Func: %ps, preempt_count : %x\n",
-			sl_to_name[sl_info->sl_type], sl_info->delay_time, sl_info->softirq_info.softirq_type, sl_info->softirq_info.fn, sl_info->preempt_count);
-	} else {
-		secdbg_softlockup_get_info(cpu, sl_info);
-		if (!(preempt_count() & PREEMPT_MASK) || softirq_count())
-			sl_info->sl_type = SL_UNKNOWN_STUCK;
-		pr_auto(ASL9, "Softlockup state: %s, Latency: %lluns, Task: %s, preempt_count: %x\n",
-			sl_to_name[sl_info->sl_type], sl_info->delay_time, sl_info->task_info.task_comm, sl_info->preempt_count);
-	}
+    sl_info->preempt_count = preempt_count();
+    if (softirq_count() &&
+        sl_info->softirq_info.last_arrival != 0 && sl_info->softirq_info.fn != NULL) {
+        sl_info->delay_time = local_clock() - sl_info->softirq_info.last_arrival;
+        sl_info->sl_type = SL_SOFTIRQ_STUCK;
+        pr_auto(ASL9, "Softlockup state: %s, Latency: %lluns, Softirq type: %s, Func: %ps, preempt_count : %x\n",
+            sl_to_name[sl_info->sl_type], sl_info->delay_time, sl_info->softirq_info.softirq_type, sl_info->softirq_info.fn, sl_info->preempt_count);
+    } else {
+        secdbg_softlockup_get_info(cpu, sl_info);
+        if (!(preempt_count() & PREEMPT_MASK) || softirq_count())
+            sl_info->sl_type = SL_UNKNOWN_STUCK;
+        pr_auto(ASL9, "Softlockup state: %s, Latency: %lluns, Task: %s, preempt_count: %x\n",
+            sl_to_name[sl_info->sl_type], sl_info->delay_time, sl_info->task_info.task_comm, sl_info->preempt_count);
+    }
 }
 
 unsigned long long get_dss_softlockup_thresh(void)
 {
-	return watchdog_thresh * 2 * NSEC_PER_SEC;
+    return watchdog_thresh * 2 * NSEC_PER_SEC;
 }
 EXPORT_SYMBOL(get_dss_softlockup_thresh);
-#endif
 
-static void lockup_detector_reconfigure(void)
+static void __lockup_detector_reconfigure(void)
 {
 	cpus_read_lock();
 	watchdog_nmi_stop();
@@ -696,6 +674,13 @@ static void lockup_detector_reconfigure(void)
 	 * recursive locking in the perf code.
 	 */
 	__lockup_detector_cleanup();
+}
+
+void lockup_detector_reconfigure(void)
+{
+	mutex_lock(&watchdog_mutex);
+	__lockup_detector_reconfigure();
+	mutex_unlock(&watchdog_mutex);
 }
 
 /*
@@ -718,13 +703,13 @@ static __init void lockup_detector_setup(void)
 		return;
 
 	mutex_lock(&watchdog_mutex);
-	lockup_detector_reconfigure();
+	__lockup_detector_reconfigure();
 	softlockup_initialized = true;
 	mutex_unlock(&watchdog_mutex);
 }
 
 #else /* CONFIG_SOFTLOCKUP_DETECTOR */
-static void lockup_detector_reconfigure(void)
+static void __lockup_detector_reconfigure(void)
 {
 	cpus_read_lock();
 	watchdog_nmi_stop();
@@ -732,9 +717,13 @@ static void lockup_detector_reconfigure(void)
 	watchdog_nmi_start();
 	cpus_read_unlock();
 }
+void lockup_detector_reconfigure(void)
+{
+	__lockup_detector_reconfigure();
+}
 static inline void lockup_detector_setup(void)
 {
-	lockup_detector_reconfigure();
+	__lockup_detector_reconfigure();
 }
 #endif /* !CONFIG_SOFTLOCKUP_DETECTOR */
 
@@ -774,7 +763,7 @@ static void proc_watchdog_update(void)
 {
 	/* Remove impossible cpus to keep sysctl output clean. */
 	cpumask_and(&watchdog_cpumask, &watchdog_cpumask, cpu_possible_mask);
-	lockup_detector_reconfigure();
+	__lockup_detector_reconfigure();
 }
 
 /*

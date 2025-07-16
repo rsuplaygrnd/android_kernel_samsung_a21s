@@ -2,12 +2,12 @@
 /*
  *  drivers/usb/notify/usb_notify_sysfs.c
  *
- * Copyright (C) 2015-2021 Samsung, Inc.
+ * Copyright (C) 2015-2017 Samsung, Inc.
  * Author: Dongrak Shin <dongrak.shin@samsung.com>
  *
  */
 
- /* usb notify layer v3.6 */
+ /* usb notify layer v3.4 */
 
 #define pr_fmt(fmt) "usb_notify: " fmt
 
@@ -19,7 +19,6 @@
 #include <linux/fs.h>
 #include <linux/err.h>
 #include <linux/usb.h>
-#include <linux/usb/ch9.h>
 #include <linux/usb_notify.h>
 #include <linux/string.h>
 #include "usb_notify_sysfs.h"
@@ -80,11 +79,9 @@ usb_hw_param_print[USB_CCIC_HW_PARAM_MAX][MAX_HWPARAM_STRING] = {
 	{"CC_PRS"},
 	{"CC_DRS"},
 	{"C_ARP"},
-	{"H_SB"},
-	{"H_OAD"},
 	{"CC_VER"},
 };
-#endif /* CONFIG_USB_HW_PARAM */
+#endif
 
 struct notify_data {
 	struct class *usb_notify_class;
@@ -216,12 +213,8 @@ static ssize_t disable_store(
 		if (param == -EINVAL) {
 			ret = param;
 		} else {
-			if (param != -EEXIST) {
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-				udev->first_restrict = false;
-#endif
+			if (param != -EEXIST)
 				udev->set_disable(udev, param);
-			}
 			strncpy(udev->disable_state_cmd,
 				disable, sizeof(udev->disable_state_cmd)-1);
 			ret = size;
@@ -317,12 +310,9 @@ static ssize_t otg_speed_show(struct device *dev,
 	struct usb_notify_dev *udev = (struct usb_notify_dev *)
 		dev_get_drvdata(dev);
 	struct otg_notify *n = udev->o_notify;
-	int dev_max_speed = 0;
 	char *speed;
 
-	dev_max_speed = get_con_dev_max_speed(n);
-
-	switch (dev_max_speed) {
+	switch (n->speed) {
 	case USB_SPEED_SUPER_PLUS:
 		speed = "SUPER PLUS";
 		break;
@@ -361,78 +351,6 @@ static ssize_t gadget_speed_show(struct device *dev,
 
 	pr_info("%s : read gadget speed %s\n", __func__, speed);
 	return snprintf(buf,  MAX_STRING_LEN, "%s\n", speed);
-}
-
-static const char *const max_speed_str[] = {
-	[USB_SPEED_UNKNOWN] = "UNKNOWN",
-	[USB_SPEED_LOW] = "low-speed",
-	[USB_SPEED_FULL] = "full-speed",
-	[USB_SPEED_HIGH] = "high-speed",
-	[USB_SPEED_WIRELESS] = "wireless-usb",
-	[USB_SPEED_SUPER] = "super-speed",
-	[USB_SPEED_SUPER_PLUS] = "super-speed+",
-};
-
-static ssize_t usb_maximum_speed_show(
-	struct device *dev, struct device_attribute *attr,
-		char *buf)
-{
-	struct usb_notify_dev *udev = (struct usb_notify_dev *)
-		dev_get_drvdata(dev);
-	int ret = 0;
-
-	ret = udev->control_usb_max_speed(udev, -1);
-
-	return sprintf(buf, "%s\n", max_speed_str[ret]);
-}
-
-static ssize_t usb_maximum_speed_store(
-		struct device *dev, struct device_attribute *attr,
-		const char *buf, size_t size)
-{
-	struct usb_notify_dev *udev = (struct usb_notify_dev *)
-		dev_get_drvdata(dev);
-	int max_speed_idx = USB_SPEED_UNKNOWN;
-	char *max_speed;
-	size_t ret = -ENOMEM, i, sret;
-
-	pr_info("%s\n", __func__);
-
-	if (size > MAX_USB_SPEED_STR_LEN) {
-		pr_err("%s size(%zu) is too long.\n", __func__, size);
-		goto error;
-	}
-
-	max_speed = kzalloc(size+1, GFP_KERNEL);
-	if (!max_speed)
-		goto error;
-
-	sret = sscanf(buf, "%s", max_speed);
-	if (sret != 1)
-		goto error1;
-
-	for (i = 0; i < ARRAY_SIZE(max_speed_str); i++) {
-		if (strncmp(max_speed, max_speed_str[i],
-				strlen(max_speed_str[i])) == 0) {
-			max_speed_idx = i;
-			break;
-		}
-	}
-
-	if (max_speed_idx == USB_SPEED_UNKNOWN) {
-		ret = -EINVAL;
-		goto error1;
-	} else {
-		sret = udev->control_usb_max_speed(udev, max_speed_idx);
-	}
-
-	pr_info("%s req=%s now=%s\n", __func__, max_speed,
-			max_speed_str[max_speed_idx]);
-	ret = size;
-error1:
-	kfree(max_speed);
-error:
-	return ret;
 }
 
 #if defined(CONFIG_USB_HW_PARAM)
@@ -476,45 +394,42 @@ static ssize_t usb_hw_param_show(struct device *dev,
 	int index, ret = 0;
 	unsigned long long *p_param = NULL;
 
-	if (udev->fp_hw_param_manager) {
-		p_param = get_hw_param(n, USB_CCIC_WATER_INT_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_INT_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_INT_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_DRY_INT_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_DRY_INT_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_DRY_INT_COUNT);
-		p_param = get_hw_param(n, USB_CLIENT_SUPER_SPEED_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CLIENT_SUPER_SPEED_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CLIENT_SUPER_SPEED_COUNT);
-		p_param = get_hw_param(n, USB_CLIENT_HIGH_SPEED_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CLIENT_HIGH_SPEED_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CLIENT_HIGH_SPEED_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_TIME_DURATION);
-		p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_VBUS_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_LPM_VBUS_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_VBUS_TIME_DURATION);
-		p_param = get_hw_param(n,
-				USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
-	}
 	p_param = get_hw_param(n, USB_CCIC_VERSION);
 	if (p_param)
 		*p_param = show_ccic_version();
@@ -597,45 +512,42 @@ static ssize_t hw_param_show(struct device *dev,
 	int index = 0, ret = 0;
 	unsigned long long *p_param = NULL;
 
-	if (udev->fp_hw_param_manager) {
-		p_param = get_hw_param(n, USB_CCIC_WATER_INT_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_INT_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_INT_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_DRY_INT_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_DRY_INT_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_DRY_INT_COUNT);
-		p_param = get_hw_param(n, USB_CLIENT_SUPER_SPEED_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CLIENT_SUPER_SPEED_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CLIENT_SUPER_SPEED_COUNT);
-		p_param = get_hw_param(n, USB_CLIENT_HIGH_SPEED_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CLIENT_HIGH_SPEED_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CLIENT_HIGH_SPEED_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_TIME_DURATION);
-		p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_VBUS_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_COUNT);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_COUNT);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_LPM_VBUS_COUNT);
-		p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_VBUS_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_VBUS_TIME_DURATION);
-		p_param = get_hw_param(n,
-				USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
-		if (p_param)
-			*p_param += udev->fp_hw_param_manager
+	p_param = get_hw_param(n, USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
+	if (p_param && udev->fp_hw_param_manager)
+		*p_param += udev->fp_hw_param_manager
 					(USB_CCIC_WATER_LPM_VBUS_TIME_DURATION);
-	}
 	if (!is_skip_list(n, USB_CCIC_VERSION)) {
 		p_param = get_hw_param(n, USB_CCIC_VERSION);
 		if (p_param)
@@ -740,14 +652,6 @@ void init_usb_whitelist_array(int *whitelist_array)
 		whitelist_array[i] = 0;
 }
 
-void init_usb_whitelist_array_for_id(int *whitelist_array, int size)
-{
-	int i;
-
-	for (i = 0; i < size; i++)
-		whitelist_array[i] = 0;
-}
-
 int set_usb_whitelist_array(const char *buf, int *whitelist_array)
 {
 	int valid_class_count = 0;
@@ -757,8 +661,6 @@ int set_usb_whitelist_array(const char *buf, int *whitelist_array)
 
 	source = (char *)buf;
 	while ((ptr = strsep(&source, ":")) != NULL) {
-		if (strlen(ptr) < 3)
-			continue;
 		pr_info("%s token = %c%c%c!\n", __func__,
 			ptr[0], ptr[1], ptr[2]);
 		for (i = U_CLASS_PER_INTERFACE; i <= U_CLASS_VENDOR_SPEC; i++) {
@@ -773,61 +675,6 @@ int set_usb_whitelist_array(const char *buf, int *whitelist_array)
 	}
 	pr_info("%s valid_class_count = %d!\n", __func__, valid_class_count);
 	return valid_class_count;
-}
-
-int set_usb_allowlist_array_for_id(const char *buf, int *whitelist_array)
-{
-	int valid_product_count = 0;
-	int vid = 0, pid = 0, ret = 0;
-	char *ptr_vid = NULL;
-	char *ptr_pid = NULL;
-	char *source;
-
-	source = (char *)buf;
-	while ((ptr_vid = strsep(&source, ":")) != NULL) {
-		if (strlen(ptr_vid) < 4) {
-			pr_err("%s short strlen(vid)\n", __func__);
-			break;
-		}
-
-		ptr_pid = strsep(&source, ":");
-
-		if (ptr_pid == NULL || strlen(ptr_pid) < 4) {
-			pr_err("%s short strlen(pid)\n", __func__);
-			break;
-		}
-
-		if (!ptr_vid[0] || !ptr_vid[1] || !ptr_vid[2] || !ptr_vid[3] ||
-			!ptr_pid[0] || !ptr_pid[1] || !ptr_pid[2] || !ptr_pid[3])
-			break;
-
-		ret = kstrtoint(ptr_vid, 16, &vid);
-		if (ret) {
-			pr_err("%s ptr_vid error. ret %d\n", __func__, ret);
-			break;
-		}
-
-		whitelist_array[valid_product_count] = vid;
-
-		ret = kstrtoint(ptr_pid, 16, &pid);
-		if (ret) {
-			pr_err("%s ptr_pid error. ret %d\n", __func__, ret);
-			break;
-		}
-
-		whitelist_array[valid_product_count+1] = pid;
-
-		pr_info("%s : allowlist_array[%d]=%04x, allowlist_array[%d]=%04x\n",
-				__func__, valid_product_count, whitelist_array[valid_product_count],
-				valid_product_count+1, whitelist_array[valid_product_count+1]);
-
-		valid_product_count += 2;
-	}
-
-	valid_product_count /= 2;
-
-	pr_info("%s valid_product_count = %d!\n", __func__, valid_product_count);
-	return valid_product_count;
 }
 
 static ssize_t whitelist_for_mdm_show(struct device *dev,
@@ -863,8 +710,8 @@ static ssize_t whitelist_for_mdm_store(
 		goto error;
 	}
 
-	if (size > MAX_WHITELIST_STR_LEN || size < 3) {
-		pr_err("%s size(%zu) is invalid.\n", __func__, size);
+	if (size > MAX_WHITELIST_STR_LEN) {
+		pr_err("%s size(%zu) is too long.\n", __func__, size);
 		goto error;
 	}
 
@@ -877,34 +724,6 @@ static ssize_t whitelist_for_mdm_store(
 	sret = sscanf(buf, "%s", disable);
 	if (sret != 1)
 		goto error1;
-
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	if (!strncmp(buf, "VPID:", ALLOWLIST_PREFIX_SIZE)) {
-
-		pr_info("allowlist_for_mdm_store VID, PID buf=%s\n", disable);
-
-		if (size >= MAX_ALLOWLIST_BUFFER) {
-			pr_err("allowlist_for_lockscreen size(%zu) is invalid.\n", size);
-			goto error1;
-		}
-
-		mutex_lock(&udev->lockscreen_enabled_lock);
-		init_usb_whitelist_array_for_id(udev->allowlist_array_lockscreen_enabled_id,
-			MAX_ALLOWLIST_DEVICE_BUFFER_INDEX);
-
-		valid_whilelist_count =	set_usb_allowlist_array_for_id
-			(buf+ALLOWLIST_PREFIX_SIZE, udev->allowlist_array_lockscreen_enabled_id);
-
-		// for furture use ex:) show function
-		strncpy(udev->allowlist_str_lockscreen_enabled_id,
-			disable, sizeof(udev->allowlist_str_lockscreen_enabled_id)-1);
-		mutex_unlock(&udev->lockscreen_enabled_lock);
-
-		ret = size;
-
-		pr_info("%s vpid allowlist update done!\n", __func__);
-	} else {
-#endif
 	pr_info("%s buf=%s\n", __func__, disable);
 
 	init_usb_whitelist_array(udev->whitelist_array_for_mdm);
@@ -934,9 +753,6 @@ static ssize_t whitelist_for_mdm_store(
 		pr_err("set_mdm func is NULL\n");
 		ret = -EINVAL;
 	}
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	}
-#endif
 error1:
 	kfree(disable);
 error:
@@ -1008,121 +824,17 @@ err:
 }
 EXPORT_SYMBOL_GPL(usb_notify_dev_uevent);
 
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-static const char *lock_string(enum usb_lock_state lock_state)
-{
-	switch (lock_state) {
-	case USB_NOTIFY_INIT_STATE:
-		return "init";
-	case USB_NOTIFY_UNLOCK:
-		return "unlock";
-	case USB_NOTIFY_LOCK_USB_WORK:
-		return "usb work lock";
-	case USB_NOTIFY_LOCK_USB_RESTRICT:
-		return "usb restrict lock";
-	default:
-		return "undefined";
-	}
-}
-#endif
-
-static ssize_t usb_sl_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct usb_notify_dev *udev = (struct usb_notify_dev *)
-		dev_get_drvdata(dev);
-
-	if (udev == NULL) {
-		pr_err("udev is NULL\n");
-		return -EINVAL;
-	}
-	pr_info("%s secure_lock = %lu\n",
-		__func__, udev->secure_lock);
-
-	return sprintf(buf, "%lu\n", udev->secure_lock);
-}
-
-static ssize_t usb_sl_store(
-		struct device *dev, struct device_attribute *attr,
-		const char *buf, size_t size)
-
-{
-	struct usb_notify_dev *udev = (struct usb_notify_dev *)
-		dev_get_drvdata(dev);
-	unsigned long secure_lock = 0;
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	unsigned long prev_secure_lock = 0;
-#endif
-	int sret = -EINVAL;
-	size_t ret = -ENOMEM;
-
-	if (udev == NULL) {
-		pr_err("udev is NULL\n");
-		return -EINVAL;
-	}
-	if (size > PAGE_SIZE) {
-		pr_err("%s size(%zu) is too long.\n", __func__, size);
-		goto error;
-	}
-
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	pr_info("%s before secure_lock = %s first_restrict = %d +\n",
-		__func__, lock_string(udev->secure_lock), udev->first_restrict);
-#else
-	pr_info("%s before secure_lock = %lu +\n",
-		__func__, udev->secure_lock);
-#endif
-
-	sret = sscanf(buf, "%lu", &secure_lock);
-	if (sret != 1)
-		goto error;
-
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	prev_secure_lock = udev->secure_lock;
-#endif
-	udev->secure_lock = secure_lock;
-	udev->set_lock_state(udev);
-
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	if (prev_secure_lock == USB_NOTIFY_INIT_STATE
-			&& secure_lock == USB_NOTIFY_LOCK_USB_RESTRICT) {
-		if (udev->set_disable) {
-			udev->set_disable(udev, NOTIFY_BLOCK_TYPE_ALL);
-			udev->first_restrict = true;
-		}
-	} else if (udev->first_restrict && prev_secure_lock == USB_NOTIFY_LOCK_USB_RESTRICT
-				&& (secure_lock == USB_NOTIFY_UNLOCK
-						|| secure_lock == USB_NOTIFY_LOCK_USB_WORK)) {
-		if (udev->set_disable) {
-			udev->set_disable(udev, NOTIFY_BLOCK_TYPE_NONE);
-			udev->first_restrict = false;
-		}
-	}
-
-	pr_info("%s after secure_lock = %s -\n",
-		__func__, lock_string(udev->secure_lock));
-#else
-	pr_info("%s after secure_lock = %lu -\n",
-		__func__, udev->secure_lock);
-#endif
-	ret = size;
-
-error:
-	return ret;
-}
 static DEVICE_ATTR_RW(disable);
 static DEVICE_ATTR_RW(usb_data_enabled);
 static DEVICE_ATTR_RO(support);
 static DEVICE_ATTR_RO(otg_speed);
 static DEVICE_ATTR_RO(gadget_speed);
-static DEVICE_ATTR_RW(usb_maximum_speed);
 static DEVICE_ATTR_RW(whitelist_for_mdm);
 static DEVICE_ATTR_RO(cards);
 #if defined(CONFIG_USB_HW_PARAM)
 static DEVICE_ATTR_RW(usb_hw_param);
 static DEVICE_ATTR_RW(hw_param);
 #endif
-static DEVICE_ATTR_RW(usb_sl);
 
 static struct attribute *usb_notify_attrs[] = {
 	&dev_attr_disable.attr,
@@ -1130,14 +842,12 @@ static struct attribute *usb_notify_attrs[] = {
 	&dev_attr_support.attr,
 	&dev_attr_otg_speed.attr,
 	&dev_attr_gadget_speed.attr,
-	&dev_attr_usb_maximum_speed.attr,
 	&dev_attr_whitelist_for_mdm.attr,
 	&dev_attr_cards.attr,
 #if defined(CONFIG_USB_HW_PARAM)
 	&dev_attr_usb_hw_param.attr,
 	&dev_attr_hw_param.attr,
 #endif
-	&dev_attr_usb_sl.attr,
 	NULL,
 };
 
@@ -1168,10 +878,6 @@ int usb_notify_dev_register(struct usb_notify_dev *udev)
 			return ret;
 	}
 
-#ifndef CONFIG_DISABLE_LOCKSCREEN_USB_RESTRICTION
-	mutex_init(&udev->lockscreen_enabled_lock);
-#endif
-
 	udev->index = atomic_inc_return(&usb_notify_data.device_count);
 	udev->dev = device_create(usb_notify_data.usb_notify_class, NULL,
 		MKDEV(0, udev->index), NULL, "%s", udev->name);
@@ -1182,8 +888,6 @@ int usb_notify_dev_register(struct usb_notify_dev *udev)
 	udev->usb_data_enabled = 1;
 	strncpy(udev->disable_state_cmd, "OFF",
 			sizeof(udev->disable_state_cmd)-1);
-	dev_set_drvdata(udev->dev, udev);
-
 	ret = sysfs_create_group(&udev->dev->kobj, &usb_notify_attr_grp);
 	if (ret < 0) {
 		device_destroy(usb_notify_data.usb_notify_class,
@@ -1191,6 +895,7 @@ int usb_notify_dev_register(struct usb_notify_dev *udev)
 		return ret;
 	}
 
+	dev_set_drvdata(udev->dev, udev);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_notify_dev_register);

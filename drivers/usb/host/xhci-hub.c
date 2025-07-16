@@ -171,7 +171,6 @@ static void xhci_common_hub_descriptor(struct xhci_hcd *xhci,
 {
 	u16 temp;
 
-	desc->bPwrOn2PwrGood = 10;	/* xhci section 5.4.9 says 20ms max */
 	desc->bHubContrCurrent = 0;
 
 	desc->bNbrPorts = ports;
@@ -206,6 +205,7 @@ static void xhci_usb2_hub_descriptor(struct usb_hcd *hcd, struct xhci_hcd *xhci,
 	desc->bDescriptorType = USB_DT_HUB;
 	temp = 1 + (ports / 8);
 	desc->bDescLength = USB_DT_HUB_NONVAR_SIZE + 2 * temp;
+	desc->bPwrOn2PwrGood = 10;	/* xhci section 5.4.8 says 20ms */
 
 	/* The Device Removable bits are reported on a byte granularity.
 	 * If the port doesn't exist within that byte, the bit is set to 0.
@@ -258,6 +258,7 @@ static void xhci_usb3_hub_descriptor(struct usb_hcd *hcd, struct xhci_hcd *xhci,
 	xhci_common_hub_descriptor(xhci, desc, ports);
 	desc->bDescriptorType = USB_DT_SS_HUB;
 	desc->bDescLength = USB_DT_SS_HUB_SIZE;
+	desc->bPwrOn2PwrGood = 50;	/* usb 3.1 may fail if less than 100ms */
 
 	/* header decode latency should be zero for roothubs,
 	 * see section 4.23.5.2.
@@ -624,6 +625,7 @@ static int xhci_enter_test_mode(struct xhci_hcd *xhci,
 			continue;
 
 		retval = xhci_disable_slot(xhci, i);
+		xhci_free_virt_device(xhci, i);
 		if (retval)
 			xhci_err(xhci, "Failed to disable slot %d, %d. Enter test mode anyway\n",
 				 i, retval);
@@ -668,7 +670,7 @@ static int xhci_exit_test_mode(struct xhci_hcd *xhci)
 	}
 	pm_runtime_allow(xhci_to_hcd(xhci)->self.controller);
 	xhci->test_mode = 0;
-	return xhci_reset(xhci);
+	return xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
 }
 
 void xhci_set_link_state(struct xhci_hcd *xhci, struct xhci_port *port,
@@ -946,7 +948,7 @@ static u32 xhci_get_port_status(struct usb_hcd *hcd,
 				slot_id = xhci_find_slot_id_by_port(hcd,
 						xhci, wIndex + 1);
 				if (!slot_id) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 					xhci_err(xhci, "slot_id is zero\n");
 #else
 					xhci_dbg(xhci, "slot_id is zero\n");
@@ -1069,7 +1071,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 		if (hcd->speed >= HCD_USB3 &&
 				(wLength < USB_DT_SS_HUB_SIZE ||
 				 wValue != (USB_DT_SS_HUB << 8))) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 			xhci_err(xhci, "Wrong hub descriptor type for "
 					"USB 3.0 roothub.\n");
 #else
@@ -1193,7 +1195,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			temp = readl(ports[wIndex]->addr);
 			/* Disable port */
 			if (link_state == USB_SS_PORT_LS_SS_DISABLED) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 				xhci_err(xhci, "Disable port %d\n", wIndex);
 #else
 				xhci_dbg(xhci, "Disable port %d\n", wIndex);
@@ -1213,7 +1215,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 
 			/* Put link in RxDetect (enable port) */
 			if (link_state == USB_SS_PORT_LS_RX_DETECT) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 				xhci_err(xhci, "Enable port %d\n", wIndex);
 #else
 				xhci_dbg(xhci, "Enable port %d\n", wIndex);
@@ -1240,7 +1242,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			 */
 			if (link_state == USB_SS_PORT_LS_COMP_MOD) {
 				if (!HCC2_CTC(xhci->hcc_params2)) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 					xhci_err(xhci, "CTC flag is 0, port already supports entering compliance mode\n");
 #else
 					xhci_dbg(xhci, "CTC flag is 0, port already supports entering compliance mode\n");
@@ -1404,7 +1406,7 @@ int xhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			slot_id = xhci_find_slot_id_by_port(hcd, xhci,
 					wIndex + 1);
 			if (!slot_id) {
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 				xhci_err(xhci, "slot_id is zero\n");
 #else
 				xhci_dbg(xhci, "slot_id is zero\n");
@@ -1483,11 +1485,12 @@ int xhci_hub_status_data(struct usb_hcd *hcd, char *buf)
 	 * Inform the usbcore about resume-in-progress by returning
 	 * a non-zero value even if there are no status changes.
 	 */
+	spin_lock_irqsave(&xhci->lock, flags);
+
 	status = bus_state->resuming_ports;
 
 	mask = PORT_CSC | PORT_PEC | PORT_OCC | PORT_PLC | PORT_WRC | PORT_CEC;
 
-	spin_lock_irqsave(&xhci->lock, flags);
 	/* For each port, did anything change?  If so, set that bit in buf. */
 	for (i = 0; i < max_ports; i++) {
 		temp = readl(ports[i]->addr);
@@ -1585,7 +1588,7 @@ int xhci_bus_suspend(struct usb_hcd *hcd)
 		if (bus_state->resuming_ports ||	/* USB2 */
 		    bus_state->port_remote_wakeup) {	/* USB3 */
 			spin_unlock_irqrestore(&xhci->lock, flags);
-#if IS_ENABLED(CONFIG_USB_DEBUG_DETAILED_LOG)
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
 			xhci_err(xhci, "suspend failed because a port is resuming\n");
 #else
 			xhci_dbg(xhci, "suspend failed because a port is resuming\n");

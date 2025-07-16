@@ -14,7 +14,7 @@ config USB_HOST_NOTIFY
 	 The uevent include host connect, disconnect, source, sink.
 
 config USB_NOTIFY_LAYER
-	tristate "USB notify layer"
+	bool "USB notify layer"
 	depends on USB
 	help
 	 Added usb notify layer on gadget,host,otg drivers.
@@ -23,7 +23,7 @@ config USB_NOTIFY_LAYER
 	 It is made by samsung.
 
 config USB_NOTIFIER
-	tristate "USB notifier"
+	bool "USB notifier"
 	depends on USB_NOTIFY_LAYER
 	help
 	 Added platform driver to call usb notify.
@@ -134,12 +134,3 @@ config USB_HOST_CERTI
 	 uevent includes information of notification
 	 The usb framework gets this uevent.
 	 It is made by samsung.
-
-config DISABLE_LOCKSCREEN_USB_RESTRICTION
-	bool "disable usb restriction during lockscreen"
-	depends on USB_NOTIFY_LAYER
-	help
-	 Restricting the usb function on the lock screen is a concept applied for usb security
-	 it has been applied since v os (oneui 7.0) or higher
-	 This feature is to avoid applying the concept.
-	 Enable this feature to enable usb communication on the lock screen.

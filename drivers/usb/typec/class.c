@@ -11,9 +11,6 @@
 #include <linux/mutex.h>
 #include <linux/property.h>
 #include <linux/slab.h>
-#if defined(CONFIG_USB_NOTIFY_LAYER)
-#include <linux/usb_notify.h>
-#endif
 
 #include "bus.h"
 
@@ -192,11 +189,13 @@ static void typec_altmode_put_partner(struct altmode *altmode)
 {
 	struct altmode *partner = altmode->partner;
 	struct typec_altmode *adev;
+	struct typec_altmode *partner_adev;
 
 	if (!partner)
 		return;
 
-	adev = &partner->adev;
+	adev = &altmode->adev;
+	partner_adev = &partner->adev;
 
 	if (is_typec_plug(adev->dev.parent)) {
 		struct typec_plug *plug = to_typec_plug(adev->dev.parent);
@@ -205,7 +204,7 @@ static void typec_altmode_put_partner(struct altmode *altmode)
 	} else {
 		partner->partner = NULL;
 	}
-	put_device(&adev->dev);
+	put_device(&partner_adev->dev);
 }
 
 static int typec_port_fwnode_match(struct device *dev, const void *fwnode)
@@ -480,9 +479,11 @@ static void typec_altmode_release(struct device *dev)
 {
 	struct altmode *alt = to_altmode(to_typec_altmode(dev));
 
-	typec_altmode_put_partner(alt);
+	if (!is_typec_port(dev->parent))
+		typec_altmode_put_partner(alt);
 
 	altmode_id_remove(alt->adev.dev.parent, alt->id);
+	put_device(alt->adev.dev.parent);
 	kfree(alt);
 }
 
@@ -531,6 +532,8 @@ typec_register_altmode(struct device *parent,
 	alt->adev.dev.groups = alt->groups;
 	alt->adev.dev.type = &typec_altmode_dev_type;
 	dev_set_name(&alt->adev.dev, "%s.%u", dev_name(parent), id);
+
+	get_device(alt->adev.dev.parent);
 
 	/* Link partners and plugs with the ports */
 	if (is_port)
@@ -707,17 +710,8 @@ EXPORT_SYMBOL_GPL(typec_register_partner);
  */
 void typec_unregister_partner(struct typec_partner *partner)
 {
-#if defined(CONFIG_USB_NOTIFY_LAYER)
-	struct otg_notify *o_notify = get_otg_notify();
-#endif
-
-	if (!IS_ERR_OR_NULL(partner)) {
+	if (!IS_ERR_OR_NULL(partner))
 		device_unregister(&partner->dev);
-#if defined(CONFIG_USB_NOTIFY_LAYER)
-		if (o_notify)
-			send_otg_notify(o_notify, NOTIFY_EVENT_PD_CONTRACT, 0);
-#endif
-	}
 }
 EXPORT_SYMBOL_GPL(typec_unregister_partner);
 
@@ -1049,6 +1043,7 @@ static ssize_t data_role_store(struct device *dev,
 		goto unlock_and_ret;
 
 	ret = size;
+
 unlock_and_ret:
 	mutex_unlock(&port->port_type_lock);
 	pr_info("%s-\n", __func__);
@@ -1151,10 +1146,12 @@ port_type_store(struct device *dev, struct device_attribute *attr,
 	mutex_lock(&port->port_type_lock);
 	pr_info("%s port_type : %d, type : %d\n", 
 		__func__, port->port_type, type);
+#if 0 /* logically, we don't need to compare previous role */
 	if (port->port_type == type) {
 		ret = size;
 		goto unlock_and_ret;
 	}
+#endif
 	ret = port->cap->port_type_set(port->cap, type);
 	if (ret)
 		goto unlock_and_ret;
@@ -1403,16 +1400,6 @@ void typec_set_pwr_opmode(struct typec_port *port,
 {
 	struct device *partner_dev;
 
-#if defined(CONFIG_USB_NOTIFY_LAYER)
-	struct otg_notify *o_notify = get_otg_notify();
-
-	if (o_notify) {
-		if (opmode == TYPEC_PWR_MODE_PD)
-			send_otg_notify(o_notify, NOTIFY_EVENT_PD_CONTRACT, 1);
-		else
-			send_otg_notify(o_notify, NOTIFY_EVENT_PD_CONTRACT, 0);
-	}
-#endif
 	pr_info("%s pwr_opmode=%d opmode=%d\n", __func__, port->pwr_opmode, opmode);
 	if (port->pwr_opmode == opmode)
 		return;
@@ -1428,6 +1415,7 @@ void typec_set_pwr_opmode(struct typec_port *port,
 			partner->usb_pd = 1;
 			sysfs_notify(&partner_dev->kobj, NULL,
 				     "supports_usb_power_delivery");
+			kobject_uevent(&partner_dev->kobj, KOBJ_CHANGE);
 		}
 		put_device(partner_dev);
 	}

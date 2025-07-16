@@ -29,8 +29,10 @@
 #if defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER)
 #include <linux/usb/typec/manager/usb_typec_manager_notifier.h>
 #endif
-#if defined(CONFIG_BATTERY_SAMSUNG)
+#if defined(CONFIG_BATTERY_SAMSUNG) && defined(CONFIG_BATTERY_SAMSUNG_LEGO_STYLE)
 #include "../../battery/common/sec_charging_common.h"
+#else
+#include <linux/battery/sec_charging_common.h>
 #endif
 #include "usb_notifier.h"
 
@@ -411,38 +413,17 @@ static int ccic_usb_handle_notification(struct notifier_block *nb,
 	}
 	return 0;
 }
-#endif
-
-#if defined(CONFIG_MUIC_NOTIFIER)
+#elif defined(CONFIG_MUIC_NOTIFIER)
 static int muic_usb_handle_notification(struct notifier_block *nb,
 		unsigned long action, void *data)
 {
-	struct otg_notify *o_notify = get_otg_notify();
 #ifdef CONFIG_PDIC_NOTIFIER
-	PD_NOTI_ATTACH_TYPEDEF *p_noti = (PD_NOTI_ATTACH_TYPEDEF *)data;
+	CC_NOTI_ATTACH_TYPEDEF *p_noti = (CC_NOTI_ATTACH_TYPEDEF *)data;
 	muic_attached_dev_t attached_dev = p_noti->cable_type;
-
-	pr_info("%s action=%lu, attached_dev=%d\n",
-		__func__, action, attached_dev);
-
-	switch (attached_dev) {
-	case ATTACHED_DEV_USB_MUIC:
-	case ATTACHED_DEV_CDP_MUIC:
-	case ATTACHED_DEV_UNOFFICIAL_ID_USB_MUIC:
-	case ATTACHED_DEV_UNOFFICIAL_ID_CDP_MUIC:
-		if (action == MUIC_NOTIFY_CMD_DETACH)
-			send_otg_notify(o_notify, NOTIFY_EVENT_USB_CABLE, 0);
-		else if (action == MUIC_NOTIFY_CMD_ATTACH)
-			send_otg_notify(o_notify, NOTIFY_EVENT_USB_CABLE, 1);
-		else
-			pr_err("%s - ACTION Error!\n", __func__);
-		break;
-	default:
-		send_otg_notify(o_notify, NOTIFY_EVENT_USB_CABLE, 0);
-		break;
-	}
 #else
 	muic_attached_dev_t attached_dev = *(muic_attached_dev_t *)data;
+#endif
+	struct otg_notify *o_notify = get_otg_notify();
 
 	pr_info("%s action=%lu, attached_dev=%d\n",
 		__func__, action, attached_dev);
@@ -452,12 +433,6 @@ static int muic_usb_handle_notification(struct notifier_block *nb,
 	case ATTACHED_DEV_CDP_MUIC:
 	case ATTACHED_DEV_UNOFFICIAL_ID_USB_MUIC:
 	case ATTACHED_DEV_UNOFFICIAL_ID_CDP_MUIC:
-		if (action == MUIC_NOTIFY_CMD_DETACH)
-			send_otg_notify(o_notify, NOTIFY_EVENT_USB_CABLE, 0);
-		else if (action == MUIC_NOTIFY_CMD_ATTACH)
-			send_otg_notify(o_notify, NOTIFY_EVENT_USB_CABLE, 1);
-		else
-			;
 	case ATTACHED_DEV_JIG_USB_OFF_MUIC:
 	case ATTACHED_DEV_JIG_USB_ON_MUIC:
 		if (action == MUIC_NOTIFY_CMD_DETACH)
@@ -544,7 +519,7 @@ static int muic_usb_handle_notification(struct notifier_block *nb,
 	default:
 		break;
 	}
-#endif
+
 	return 0;
 }
 #endif
@@ -573,7 +548,7 @@ static int vbus_handle_notification(struct notifier_block *nb,
 	return 0;
 }
 #endif
-#if defined(CONFIG_BATTERY_SAMSUNG)
+
 static int otg_accessory_power(bool enable)
 {
 	u8 on = (u8)!!enable;
@@ -626,7 +601,7 @@ static int set_online(int event, int state)
 
 	return 0;
 }
-#endif
+
 static int exynos_set_host(bool enable)
 {
 	if (!enable) {
@@ -644,6 +619,9 @@ static int exynos_set_host(bool enable)
 	return 0;
 }
 
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+extern void set_ncm_ready(bool ready);
+#endif
 static int exynos_set_peripheral(bool enable)
 {
 	if (enable) {
@@ -652,12 +630,15 @@ static int exynos_set_peripheral(bool enable)
 	} else {
 		pr_info("%s usb detached\n", __func__);
 		check_usb_vbus_state(0);
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+		set_ncm_ready(false);
+#endif
 	}
 	return 0;
 }
 
 #if defined(CONFIG_BATTERY_SAMSUNG)
-static int usb_set_chg_current(int state)
+static int usb_blocked_chg_control(int set)
 {
 	union power_supply_propval val;
 	struct device_node *np_charger = NULL;
@@ -678,28 +659,19 @@ static int usb_set_chg_current(int state)
 		return 0;
 	}
 
-	/* current setting */
-	pr_info("usb: charging current set = %d\n", state);
+	/* current setting for upsm */
+	pr_info("usb blocked : charing current set = %d\n", set);
 
-	switch (state) {
-	case NOTIFY_USB_SUSPENDED:
-		val.intval = USB_CURRENT_SUSPENDED;
-		break;
-	case NOTIFY_USB_UNCONFIGURED:
+	if (set)
+		val.intval = USB_CURRENT_HIGH_SPEED;
+	else
 		val.intval = USB_CURRENT_UNCONFIGURED;
-		break;
-	case NOTIFY_USB_CONFIGURED:
-		val.intval = USB_CURRENT_HIGH_SPEED;
-		break;
-	default:
-		val.intval = USB_CURRENT_HIGH_SPEED;
-		break;
-	}
 
 	psy_do_property("battery", set,
 			POWER_SUPPLY_EXT_PROP_USB_CONFIGURE, val);
 
 	return 0;
+
 }
 #endif
 
@@ -735,9 +707,7 @@ static int is_skip_list(int index)
 #endif
 
 static struct otg_notify dwc_lsi_notify = {
-#if defined(CONFIG_BATTERY_SAMSUNG)
 	.vbus_drive	= otg_accessory_power,
-#endif
 	.set_host = exynos_set_host,
 	.set_peripheral	= exynos_set_peripheral,
 	.vbus_detect_gpio = -1,
@@ -749,14 +719,12 @@ static struct otg_notify dwc_lsi_notify = {
 #endif
 	.disable_control = 1,
 	.device_check_sec = 3,
-#if defined(CONFIG_BATTERY_SAMSUNG)
 	.set_battcall = set_online,
-#endif
 #ifdef CONFIG_PDIC_NOTIFIER
 	.set_ldo_onoff = usb_regulator_onoff,
 #endif
 #if defined(CONFIG_BATTERY_SAMSUNG)
-	.set_chg_current = usb_set_chg_current,
+	.set_chg_current = usb_blocked_chg_control,
 #endif
 #if defined(CONFIG_USB_HW_PARAM)
 	.is_skip_list = is_skip_list,
@@ -809,8 +777,7 @@ static int usb_notifier_probe(struct platform_device *pdev)
 	pdic_notifier_register(&pdata->ccic_usb_nb, ccic_usb_handle_notification,
 				   PDIC_NOTIFY_DEV_USB);
 #endif
-#endif
-#if defined(CONFIG_MUIC_NOTIFIER)
+#elif defined(CONFIG_MUIC_NOTIFIER)
 	muic_notifier_register(&pdata->muic_usb_nb, muic_usb_handle_notification,
 			       MUIC_NOTIFY_DEV_USB);
 #endif
@@ -868,7 +835,7 @@ static int __init usb_notifier_init(void)
 	return platform_driver_register(&usb_notifier_driver);
 }
 
-static void __exit usb_notifier_exit(void)
+static void __init usb_notifier_exit(void)
 {
 	platform_driver_unregister(&usb_notifier_driver);
 }

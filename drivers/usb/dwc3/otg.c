@@ -42,9 +42,6 @@
 #include "usb_power_notify.h"
 #endif
 
-#if IS_ENABLED(CONFIG_USB_NOTIFY_LAYER)
-#include <linux/usb_notify.h>
-#endif
 #define OTG_NO_CONNECT		0
 #define OTG_CONNECT_ONLY	1
 #define OTG_DEVICE_CONNECT	2
@@ -333,7 +330,7 @@ out:
 	mutex_unlock(&dotg->lock);
 	return ret;
 }
-int list_clear = 0;
+
 static int dwc3_otg_start_host(struct otg_fsm *fsm, int on)
 {
 	struct usb_otg	*otg = fsm->otg;
@@ -370,8 +367,6 @@ static int dwc3_otg_start_host(struct otg_fsm *fsm, int on)
 		}
 
 		dwc3_otg_set_host_mode(dotg);
-		if (list_clear == 1)
-			INIT_LIST_HEAD(&dwc->xhci->dev.links.needs_suppliers);
 		ret = platform_device_add(dwc->xhci);
 		if (ret) {
 			dev_err(dev, "%s: cannot add xhci\n", __func__);
@@ -400,7 +395,6 @@ static int dwc3_otg_start_host(struct otg_fsm *fsm, int on)
 
 		platform_device_del(dwc->xhci);
 		dwc->xhci->dev.p->dead = 0;
-		list_clear = 1;
 
 err2:
 		ret = dwc3_otg_phy_enable(fsm, 0, on);
@@ -427,6 +421,7 @@ static int dwc3_otg_start_gadget(struct otg_fsm *fsm, int on)
 
 	if (on) {
 		wake_lock(&dotg->wakelock);
+		dwc->vbus_state = true;
 		ret = dwc3_otg_phy_enable(fsm, 0, on);
 		if (ret) {
 			dev_err(dwc->dev, "%s: failed to reinitialize core\n",
@@ -443,6 +438,7 @@ static int dwc3_otg_start_gadget(struct otg_fsm *fsm, int on)
 		}
 
 	} else {
+		dwc->vbus_state = false;
 		if (dwc->is_not_vbus_pad)
 			dwc3_gadget_disconnect_proc(dwc);
 		/* avoid missing disconnect interrupt */
@@ -652,10 +648,6 @@ dwc3_otg_store_b_sess(struct device *dev,
 	if (sscanf(buf, "%d", &b_sess_vld) != 1){
 		return -EINVAL;
 	}
-#if IS_ENABLED(CONFIG_USB_NOTIFY_LAYER)
-	if (is_blocked(get_otg_notify(), NOTIFY_BLOCK_TYPE_CLIENT))
-		return NOTIFY_OK;
-#endif
 
 	fsm->b_sess_vld = !!b_sess_vld;
 
@@ -686,11 +678,6 @@ dwc3_otg_store_id(struct device *dev,
 
 	if (sscanf(buf, "%d", &id) != 1)
 		return -EINVAL;
-
-#if IS_ENABLED(CONFIG_USB_NOTIFY_LAYER)
-	if (is_blocked(get_otg_notify(), NOTIFY_BLOCK_TYPE_HOST))
-		return NOTIFY_OK;
-#endif
 
 	fsm->id = !!id;
 

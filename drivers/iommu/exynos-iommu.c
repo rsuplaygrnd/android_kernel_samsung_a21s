@@ -644,6 +644,7 @@ static int __init exynos_sysmmu_probe(struct platform_device *pdev)
 			MMU_REV_VER(data->version));
 
 	return 0;
+
 }
 
 static bool __sysmmu_disable(struct sysmmu_drvdata *drvdata)

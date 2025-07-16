@@ -30,8 +30,10 @@
 
 #include <linux/phy/phy.h>
 
-#if IS_ENABLED(CONFIG_BATTERY_SAMSUNG)
+#if defined(CONFIG_BATTERY_SAMSUNG_LEGO_STYLE)
 #include "../../battery/common/sec_charging_common.h"
+#else
+#include "../../battery_v2/include/sec_charging_common.h"
 #endif
 
 #define DWC3_MSG_MAX	500
@@ -140,6 +142,7 @@
 #define DWC3_GEVNTCOUNT(n)	(0xc40c + ((n) * 0x10))
 
 #define DWC3_GHWPARAMS8		0xc600
+#define DWC3_GUCTL3		0xc60c
 #define DWC3_GFLADJ		0xc630
 
 /* Device Registers */
@@ -297,12 +300,10 @@
 #define DWC3_GCTL_DSBLCLKGTNG		BIT(0)
 #define DWC3_GUCTL_USBHSTINAUTORETRYEN	(1 << 14)
 
-#define DWC3_GUCTL_HSTINAUTORETRY	BIT(14)
 
 #define DWC3_GUCTL_REFCLKPER(n)		((n) << 22)
 #define DWC3_GUCTL_REFCLKPER_MASK	(DWC3_GUCTL_REFCLKPER(0x3FF))
 #define DWC3_GUCTL_NOEXTRDL		(1 << 21)
-#define DWC3_GUCTL_USBHSTINAUTORETRYEN	(1 << 14)
 #define DWC3_GUCTL_SPRSCTRLTRANSEN	(1 << 17)
 #define DWC3_GUCTL_DTOUT(n)		(n)
 #define DWC3_GUCTL_DTOUT_MASK		(0x7ff)
@@ -431,6 +432,9 @@
 
 /* Global User Control Register 2 */
 #define DWC3_GUCTL2_RST_ACTBITLATER		BIT(14)
+
+/* Global User Control Register 3 */
+#define DWC3_GUCTL3_SPLITDISABLE		BIT(14)
 
 /* Device Configuration Register */
 #define DWC3_DCFG_DEVADDR(addr)	((addr) << 3)
@@ -771,9 +775,7 @@ struct dwc3_ep {
 #define DWC3_EP_WEDGE		BIT(2)
 #define DWC3_EP_TRANSFER_STARTED BIT(3)
 #define DWC3_EP_PENDING_REQUEST	BIT(5)
-#define DWC3_EP_DELAY_START	BIT(6)
 #define DWC3_EP_END_TRANSFER_PENDING	BIT(7)
-#define DWC3_EP_PENDING_CLEAR_STALL	BIT(11)
 
 	/* This last one is specific to EP0 */
 #define DWC3_EP0_DIR_IN		BIT(31)
@@ -839,6 +841,11 @@ enum dwc3_link_state {
 	DWC3_LINK_STATE_RESET		= 0x0e,
 	DWC3_LINK_STATE_RESUME		= 0x0f,
 	DWC3_LINK_STATE_MASK		= 0x0f,
+};
+
+enum {
+	RELEASE	= 0,
+	NOTIFY	= 1,
 };
 
 /* TRB Length, PCM and Status */
@@ -1103,6 +1110,7 @@ struct dwc3_scratchpad_array {
  * 	2	- No de-emphasis
  * 	3	- Reserved
  * @dis_metastability_quirk: set to disable metastability quirk.
+ * @dis_split_quirk: set to disable split boundary.
  * @imod_interval: set the interrupt moderation interval in 250ns
  *                 increments or 0 to disable.
  * @adj_sof_accuracy: set to adjust sof accuracy
@@ -1296,6 +1304,8 @@ struct dwc3 {
 
 	unsigned		dis_metastability_quirk:1;
 
+	unsigned		dis_split_quirk:1;
+
 	u16			imod_interval;
 
 	unsigned		adj_sof_accuracy:1;
@@ -1312,12 +1322,17 @@ struct dwc3 {
 	struct workqueue_struct	*int_qos_lock_wq;
 	struct work_struct	int_qos_work;
 	int level_val;
-#if IS_ENABLED(CONFIG_BATTERY_SAMSUNG)
 	struct work_struct      set_vbus_current_work;
 	int			vbus_current; /* 100mA,  500mA,  900mA */
-#endif
+	struct delayed_work usb_event_work;
+	ktime_t rst_time_before;
+	ktime_t rst_time_first;
+	int rst_err_cnt;
+	bool rst_err_noti;
+	bool event_state;
 };
 
+#define ERR_RESET_CNT	3
 #define INCRX_BURST_MODE 0
 #define INCRX_UNDEF_LENGTH_BURST_MODE 1
 
@@ -1580,7 +1595,6 @@ static inline void dwc3_otg_host_init(struct dwc3 *dwc)
 #if !IS_ENABLED(CONFIG_USB_DWC3_HOST)
 int dwc3_gadget_suspend(struct dwc3 *dwc);
 int dwc3_gadget_resume(struct dwc3 *dwc);
-void dwc3_gadget_process_pending_events(struct dwc3 *dwc);
 #else
 static inline int dwc3_gadget_suspend(struct dwc3 *dwc)
 {
@@ -1592,9 +1606,6 @@ static inline int dwc3_gadget_resume(struct dwc3 *dwc)
 	return 0;
 }
 
-static inline void dwc3_gadget_process_pending_events(struct dwc3 *dwc)
-{
-}
 #endif /* !IS_ENABLED(CONFIG_USB_DWC3_HOST) */
 
 #if IS_ENABLED(CONFIG_USB_DWC3_ULPI)

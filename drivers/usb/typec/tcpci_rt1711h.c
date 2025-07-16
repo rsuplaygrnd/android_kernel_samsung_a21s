@@ -15,7 +15,6 @@
 #include "tcpci.h"
 
 #define RT1711H_VID		0x29CF
-#define ET7303_VID		0x6DCF
 #define RT1711H_PID		0x1711
 
 #define RT1711H_RTCTRL8		0x9B
@@ -35,8 +34,6 @@
 #define RT1711H_RTCTRL14	0xA1
 #define RT1711H_RTCTRL15	0xA2
 #define RT1711H_RTCTRL16	0xA3
-
-#define RT1711H_IRQ_WAKE_TIME	500
 
 struct rt1711h_chip {
 	struct tcpci_data data;
@@ -165,8 +162,6 @@ static irqreturn_t rt1711h_irq(int irq, void *dev_id)
 	if (!chip->tcpci)
 		return IRQ_HANDLED;
 
-	pm_wakeup_event(chip->dev, RT1711H_IRQ_WAKE_TIME);
-
 	ret = rt1711h_read16(chip, TCPC_ALERT, &alert);
 	if (ret < 0)
 		goto out;
@@ -203,7 +198,7 @@ static int rt1711h_check_revision(struct i2c_client *i2c)
 	ret = i2c_smbus_read_word_data(i2c, TCPC_VENDOR_ID);
 	if (ret < 0)
 		return ret;
-	if (ret != RT1711H_VID && ret != ET7303_VID) {
+	if (ret != RT1711H_VID) {
 		dev_err(&i2c->dev, "vid is not correct, 0x%04x\n", ret);
 		return -ENODEV;
 	}
@@ -214,7 +209,6 @@ static int rt1711h_check_revision(struct i2c_client *i2c)
 		dev_err(&i2c->dev, "pid is not correct, 0x%04x\n", ret);
 		return -ENODEV;
 	}
-	pr_info("usb: discrete pdic found\n");
 	return 0;
 }
 
@@ -258,8 +252,6 @@ static int rt1711h_probe(struct i2c_client *client,
 	if (IS_ERR_OR_NULL(chip->tcpci))
 		return PTR_ERR(chip->tcpci);
 
-	device_init_wakeup(chip->dev, true);
-
 	ret = devm_request_threaded_irq(chip->dev, client->irq, NULL,
 					rt1711h_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_LOW,
@@ -267,8 +259,6 @@ static int rt1711h_probe(struct i2c_client *client,
 	if (ret < 0)
 		return ret;
 	enable_irq_wake(client->irq);
-
-	pr_info("usb: discrete pdic probe done\n");
 
 	return 0;
 }

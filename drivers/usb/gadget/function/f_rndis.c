@@ -101,9 +101,11 @@ static inline struct f_rndis *func_to_rndis(struct usb_function *f)
 /* peak (theoretical) bulk transfer rate in bits-per-second */
 static unsigned int bitrate(struct usb_gadget *g)
 {
-	if (gadget_is_superspeed(g) && g->speed >= USB_SPEED_SUPER)
-		return 13 * 1024 * 8 * 1000 * 8;
-	else if (gadget_is_dualspeed(g) && g->speed >= USB_SPEED_HIGH)
+	if (gadget_is_superspeed(g) && g->speed >= USB_SPEED_SUPER_PLUS)
+		return 4250000000U;
+	if (gadget_is_superspeed(g) && g->speed == USB_SPEED_SUPER)
+		return 3750000000U;
+	else if (gadget_is_dualspeed(g) && g->speed == USB_SPEED_HIGH)
 		return 13 * 512 * 8 * 1000 * 8;
 	else
 		return 19 * 64 * 1 * 1000 * 8;
@@ -903,7 +905,6 @@ void rndis_borrow_net(struct usb_function_instance *f, struct net_device *net)
 }
 EXPORT_SYMBOL_GPL(rndis_borrow_net);
 
-/*
 #ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
 static int set_rndis_mac_addr(struct usb_function_instance *fi,
 		    u8 *ethaddr)
@@ -919,7 +920,6 @@ static int set_rndis_mac_addr(struct usb_function_instance *fi,
 	return 0;
 }
 #endif
-*/
 
 static inline struct f_rndis_opts *to_f_rndis_opts(struct config_item *item)
 {
@@ -998,11 +998,9 @@ static struct usb_function_instance *rndis_alloc_inst(void)
 
 	mutex_init(&opts->lock);
 	opts->func_inst.free_func_inst = rndis_free_inst;
-/*
 #ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
 	opts->func_inst.set_inst_eth_addr = set_rndis_mac_addr;
 #endif
-*/
 	opts->net = gether_setup_name_default("rndis");
 	if (IS_ERR(opts->net)) {
 		struct net_device *net = opts->net;
@@ -1076,8 +1074,11 @@ static void rndis_unbind(struct usb_configuration *c, struct usb_function *f)
 		ERROR(cdev, "%s: failed to setup ethernet\n", f->name);
 		return;
 	}
-
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+	gether_set_host_addr(opts->net, rndis->ethaddr);
+#else
 	gether_get_host_addr_u8(opts->net, rndis->ethaddr);
+#endif
 	rndis->port.ioport = netdev_priv(opts->net);
 
 	opts->bound = false;
